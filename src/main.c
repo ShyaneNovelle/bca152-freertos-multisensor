@@ -5,15 +5,15 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_timer.h"
 #include "rom/ets_sys.h"
 
-// Hardware Pin Configuration
 #define DHT_PIN GPIO_NUM_15
-#define LDR_CHANNEL ADC_CHANNEL_6 
+#define LDR_CHANNEL ADC_CHANNEL_6 // GPIO 34
 #define PIR_PIN GPIO_NUM_27
 #define BUZZER_PIN GPIO_NUM_14
 
@@ -26,14 +26,14 @@
 #define I2C_SCL_PIN GPIO_NUM_22
 #define OLED_ADDR 0x3C
 
-// Section 35: Event Group Bit Definitions
 #define EVENT_ACTIVE (1 << 0) // BIT0
 #define EVENT_MOTION (1 << 1) // BIT1
 #define EVENT_ALARM  (1 << 2) // BIT2
 
 static EventGroupHandle_t systemEvents = NULL;
 
-// Alarm States & Thresholds
+static SemaphoreHandle_t serialMutex = NULL;
+
 typedef enum {
     ALARM_NORMAL = 0,
     ALARM_LOW_TEMPERATURE,
@@ -52,7 +52,6 @@ typedef enum {
     MODE_COUNT
 } DisplayMode;
 
-// Sensor Data Structure
 typedef struct {
     float temperature;
     float humidity;
@@ -65,6 +64,16 @@ static QueueHandle_t sensorQueue = NULL;
 static QueueHandle_t modeQueue = NULL;
 static adc_oneshot_unit_handle_t adc1_handle;
 static i2c_master_dev_handle_t oled_dev_handle = NULL;
+
+// Thread-safe wrapper para maiwasan ang interleaved serial output
+void safe_log(const char *msg) {
+    if (serialMutex != NULL) {
+        if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
+            printf("%s", msg);
+            xSemaphoreGive(serialMutex);
+        }
+    }
+}
 
 // Pure Testable Function
 AlarmState evaluateTemperature(float temperature) {
@@ -229,12 +238,14 @@ static int read_ldr_percentage(void) {
     return 0;
 }
 
+// MotionTask
 void motion_task(void *pvParameters) {
     gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIR_PIN, GPIO_PULLDOWN_ONLY);
 
     int64_t last_motion_time = esp_timer_get_time();
     const int64_t timeout_us = 15LL * 1000000LL;
+    bool was_motion = false;
 
     while (1) {
         int motion = gpio_get_level(PIR_PIN);
@@ -242,10 +253,18 @@ void motion_task(void *pvParameters) {
         if (motion == 1) {
             last_motion_time = esp_timer_get_time();
             xEventGroupSetBits(systemEvents, EVENT_MOTION | EVENT_ACTIVE);
+            if (!was_motion) {
+                safe_log("[MotionTask] Motion Detected! State -> ACTIVE\n");
+                was_motion = true;
+            }
         } else {
+            was_motion = false;
             xEventGroupClearBits(systemEvents, EVENT_MOTION);
             if ((esp_timer_get_time() - last_motion_time) > timeout_us) {
-                xEventGroupClearBits(systemEvents, EVENT_ACTIVE);
+                if (xEventGroupGetBits(systemEvents) & EVENT_ACTIVE) {
+                    xEventGroupClearBits(systemEvents, EVENT_ACTIVE);
+                    safe_log("[MotionTask] Inactivity Timeout (15s)! State -> INACTIVE\n");
+                }
             }
         }
 
@@ -253,9 +272,11 @@ void motion_task(void *pvParameters) {
     }
 }
 
+// SensorTask
 void sensor_task(void *pvParameters) {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(2000);
+    char log_buf[96];
 
     while (1) {
         SensorData data = {0};
@@ -271,6 +292,11 @@ void sensor_task(void *pvParameters) {
                 xEventGroupClearBits(systemEvents, EVENT_ALARM);
             }
 
+            snprintf(log_buf, sizeof(log_buf),
+                     "[SensorTask] Temp: %.2f C | Hum: %.2f %% | Light: %d %%\n",
+                     data.temperature, data.humidity, data.lightLevel);
+            safe_log(log_buf);
+
             xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100));
         }
 
@@ -278,6 +304,7 @@ void sensor_task(void *pvParameters) {
     }
 }
 
+// AlarmTask
 void alarm_task(void *pvParameters) {
     gpio_set_direction(BUZZER_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(BUZZER_PIN, 0);
@@ -309,6 +336,7 @@ void input_task(void *pvParameters) {
 
     int last_clk = gpio_get_level(ENCODER_CLK);
     DisplayMode current_mode = MODE_TEMPERATURE;
+    char log_buf[64];
 
     while (1) {
         int current_clk = gpio_get_level(ENCODER_CLK);
@@ -316,10 +344,13 @@ void input_task(void *pvParameters) {
         if (current_clk != last_clk && current_clk == 0) {
             if (gpio_get_level(ENCODER_DT) != current_clk) {
                 current_mode = (current_mode + 1) % MODE_COUNT;
+                snprintf(log_buf, sizeof(log_buf), "[InputTask] Rotated CW -> Mode: %d\n", current_mode);
             } else {
                 if (current_mode == 0) current_mode = MODE_COUNT - 1;
                 else current_mode--;
+                snprintf(log_buf, sizeof(log_buf), "[InputTask] Rotated CCW -> Mode: %d\n", current_mode);
             }
+            safe_log(log_buf);
             xQueueOverwrite(modeQueue, &current_mode);
         }
 
@@ -401,7 +432,9 @@ void display_task(void *pvParameters) {
 }
 
 void app_main(void) {
-    printf("Starting Multisensor with Event Group Signaling...\n");
+    serialMutex = xSemaphoreCreateMutex();
+
+    safe_log("Starting Multisensor with Mutex Protected Serial...\n");
 
     adc_oneshot_unit_init_cfg_t init_config1 = {.unit_id = ADC_UNIT_1};
     adc_oneshot_new_unit(&init_config1, &adc1_handle);
@@ -412,7 +445,6 @@ void app_main(void) {
     };
     adc_oneshot_config_channel(adc1_handle, LDR_CHANNEL, &config);
 
-    // Section 35: FreeRTOS Event Group Creation
     systemEvents = xEventGroupCreate();
     xEventGroupSetBits(systemEvents, EVENT_ACTIVE);
 
@@ -422,7 +454,7 @@ void app_main(void) {
     DisplayMode initial_mode = MODE_TEMPERATURE;
     xQueueSend(modeQueue, &initial_mode, 0);
 
-    if (systemEvents != NULL && sensorQueue != NULL && modeQueue != NULL) {
+    if (systemEvents != NULL && sensorQueue != NULL && modeQueue != NULL && serialMutex != NULL) {
         xTaskCreate(alarm_task, "AlarmTask", 2048, NULL, 3, NULL);
         xTaskCreate(motion_task, "MotionTask", 2048, NULL, 3, NULL);
         xTaskCreate(input_task, "InputTask", 2048, NULL, 3, NULL);
