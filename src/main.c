@@ -12,6 +12,8 @@
 
 #define DHT_PIN GPIO_NUM_15
 #define LDR_CHANNEL ADC_CHANNEL_6 
+#define PIR_PIN GPIO_NUM_27       
+
 
 #define ENCODER_CLK GPIO_NUM_18
 #define ENCODER_DT  GPIO_NUM_19
@@ -21,6 +23,11 @@
 #define I2C_SDA_PIN GPIO_NUM_21
 #define I2C_SCL_PIN GPIO_NUM_22
 #define OLED_ADDR 0x3C
+
+typedef enum {
+    SYSTEM_ACTIVE = 0,
+    SYSTEM_INACTIVE
+} SystemState;
 
 typedef enum {
     ALARM_NORMAL = 0,
@@ -49,9 +56,12 @@ typedef struct {
 
 static QueueHandle_t sensorQueue = NULL;
 static QueueHandle_t modeQueue = NULL;
+static QueueHandle_t stateQueue = NULL; 
 static adc_oneshot_unit_handle_t adc1_handle;
 static i2c_master_dev_handle_t oled_dev_handle = NULL;
+static volatile bool g_motion_status = false;
 
+// Pure Testable Function
 AlarmState evaluateTemperature(float temperature) {
     if (temperature < TEMP_LOW_THRESHOLD) {
         return ALARM_LOW_TEMPERATURE;
@@ -213,6 +223,36 @@ static int read_ldr_percentage(void) {
     return 0;
 }
 
+void motion_task(void *pvParameters) {
+    gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIR_PIN, GPIO_PULLDOWN_ONLY);
+
+    SystemState current_state = SYSTEM_ACTIVE;
+    int64_t last_motion_time = esp_timer_get_time();
+    const int64_t timeout_us = 15LL * 1000000LL; 
+    while (1) {
+        int motion = gpio_get_level(PIR_PIN);
+        g_motion_status = (motion == 1);
+
+        if (motion == 1) {
+            last_motion_time = esp_timer_get_time();
+            if (current_state == SYSTEM_INACTIVE) {
+                current_state = SYSTEM_ACTIVE;
+                printf("[MotionTask] Motion Detected! State -> ACTIVE\n");
+                xQueueOverwrite(stateQueue, &current_state);
+            }
+        } else {
+            if (current_state == SYSTEM_ACTIVE && (esp_timer_get_time() - last_motion_time) > timeout_us) {
+                current_state = SYSTEM_INACTIVE;
+                printf("[MotionTask] Inactivity Timeout (15s)! State -> INACTIVE\n");
+                xQueueOverwrite(stateQueue, &current_state);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100)); 
+    }
+}
+
 void sensor_task(void *pvParameters) {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(2000);
@@ -220,19 +260,10 @@ void sensor_task(void *pvParameters) {
     while (1) {
         SensorData data = {0};
         data.lightLevel = read_ldr_percentage();
-        data.motionDetected = false;
+        data.motionDetected = g_motion_status;
 
         if (read_dht22(&data.temperature, &data.humidity) == ESP_OK) {
-            // Section 30: Tawagon ang pure evaluation function
             data.alarm = evaluateTemperature(data.temperature);
-
-            const char *alarm_text = "NORMAL";
-            if (data.alarm == ALARM_LOW_TEMPERATURE) alarm_text = "LOW TEMP";
-            else if (data.alarm == ALARM_HIGH_TEMPERATURE) alarm_text = "HIGH TEMP";
-
-            printf("[SensorTask] Temp: %.2f C (Alarm: %s) | Hum: %.2f %% | Light: %d %%\n",
-                   data.temperature, alarm_text, data.humidity, data.lightLevel);
-
             xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100));
         }
 
@@ -312,6 +343,7 @@ void display_task(void *pvParameters) {
         .alarm = ALARM_NORMAL
     };
     DisplayMode active_mode = MODE_TEMPERATURE;
+    SystemState current_state = SYSTEM_ACTIVE;
 
     oled_init();
     render_screen(active_mode, &latest);
@@ -319,35 +351,40 @@ void display_task(void *pvParameters) {
     while (1) {
         bool need_refresh = false;
 
+        SystemState new_state;
+        if (xQueueReceive(stateQueue, &new_state, 0) == pdPASS) {
+            if (new_state != current_state) {
+                current_state = new_state;
+                if (current_state == SYSTEM_INACTIVE) {
+                    oled_clear(); 
+                } else {
+                    need_refresh = true; 
+                }
+            }
+        }
+
         DisplayMode new_mode;
         if (xQueueReceive(modeQueue, &new_mode, pdMS_TO_TICKS(50)) == pdPASS) {
             if (new_mode != active_mode) {
                 active_mode = new_mode;
-                need_refresh = true;
+                if (current_state == SYSTEM_ACTIVE) need_refresh = true;
             }
         }
 
         SensorData new_data;
         if (xQueueReceive(sensorQueue, &new_data, 0) == pdPASS) {
             latest = new_data;
-            need_refresh = true;
+            if (current_state == SYSTEM_ACTIVE) need_refresh = true;
         }
 
-        if (need_refresh) {
+        if (current_state == SYSTEM_ACTIVE && need_refresh) {
             render_screen(active_mode, &latest);
         }
     }
 }
 
 void app_main(void) {
-    printf("Starting Multisensor with Testable Alarm Logic...\n");
-
-    printf("[Unit Test] evaluateTemperature(15.0) = %s\n",
-           evaluateTemperature(15.0) == ALARM_LOW_TEMPERATURE ? "PASS (LOW)" : "FAIL");
-    printf("[Unit Test] evaluateTemperature(25.4) = %s\n",
-           evaluateTemperature(25.4) == ALARM_NORMAL ? "PASS (NORMAL)" : "FAIL");
-    printf("[Unit Test] evaluateTemperature(32.0) = %s\n",
-           evaluateTemperature(32.0) == ALARM_HIGH_TEMPERATURE ? "PASS (HIGH)" : "FAIL");
+    printf("Starting System with Motion and State Machine...\n");
 
     adc_oneshot_unit_init_cfg_t init_config1 = {.unit_id = ADC_UNIT_1};
     adc_oneshot_new_unit(&init_config1, &adc1_handle);
@@ -360,13 +397,18 @@ void app_main(void) {
 
     sensorQueue = xQueueCreate(5, sizeof(SensorData));
     modeQueue = xQueueCreate(1, sizeof(DisplayMode));
+    stateQueue = xQueueCreate(1, sizeof(SystemState));
 
     DisplayMode initial_mode = MODE_TEMPERATURE;
+    SystemState initial_state = SYSTEM_ACTIVE;
     xQueueSend(modeQueue, &initial_mode, 0);
+    xQueueSend(stateQueue, &initial_state, 0);
 
-    if (sensorQueue != NULL && modeQueue != NULL) {
+    if (sensorQueue != NULL && modeQueue != NULL && stateQueue != NULL) {
+        
         xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
         xTaskCreate(input_task, "InputTask", 2048, NULL, 3, NULL);
+        xTaskCreate(motion_task, "MotionTask", 2048, NULL, 3, NULL);
         xTaskCreate(display_task, "DisplayTask", 4096, NULL, 1, NULL);
     }
 }
