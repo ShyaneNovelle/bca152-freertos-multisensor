@@ -2,20 +2,27 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+// Task A definition
+void taskA(void *pvParameters)
+{
+    while (1) {
+        printf("Task A running\n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+// Task B definition
+void taskB(void *pvParameters)
+{
+    while (1) {
+        printf("Task B running\n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 void app_main(void)
 {
-    
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
-    printf("\n\n==============================\n");
-    printf("BCA152 FreeRTOS Multisensor\n");
-    printf("System starting...\n");
-    printf("==============================\n\n");
-    fflush(stdout);
-
-    while (1) {
-        printf("BCA152 FreeRTOS Multisensor running...\n");
-        fflush(stdout);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
+    // Paghimo sa duha ka tasks
+    xTaskCreate(taskA, "Task_A", 2048, NULL, 1, NULL);
+    xTaskCreate(taskB, "Task_B", 2048, NULL, 1, NULL);
 }
