@@ -7,7 +7,7 @@
 #include "rom/ets_sys.h"
 
 #define DHT_PIN GPIO_NUM_15
-#define LDR_CHANNEL ADC_CHANNEL_6 // GPIO 34 sa ESP32
+#define LDR_CHANNEL ADC_CHANNEL_6 
 
 static adc_oneshot_unit_handle_t adc1_handle;
 
@@ -56,35 +56,19 @@ static esp_err_t read_dht22(float *temperature, float *humidity) {
     return ESP_OK;
 }
 
-// Pagbasa ng LDR gamit ang bagong ADC Oneshot API at conversion sa 0-100%
 static int read_ldr_percentage(void) {
     int raw = 0;
     if (adc_oneshot_read(adc1_handle, LDR_CHANNEL, &raw) == ESP_OK) {
-        // Ang 12-bit ADC ay may saklaw na 0 hanggang 4095
         int percentage = (raw * 100) / 4095;
         return percentage;
     }
     return 0;
 }
 
-void app_main(void)
+void sensor_task(void *pvParameters)
 {
-    printf("Sensors Initialized (DHT22 + LDR)...\n");
-
-    // 1. Pag-configure ng ADC Unit 1 gamit ang ESP-IDF v5 API
-    adc_oneshot_unit_init_cfg_t init_config1 = {
-        .unit_id = ADC_UNIT_1,
-    };
-    adc_oneshot_new_unit(&init_config1, &adc1_handle);
-
-    // 2. Pag-configure ng ADC Channel para sa LDR
-    adc_oneshot_chan_cfg_t config = {
-        .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten = ADC_ATTEN_DB_12,
-    };
-    adc_oneshot_config_channel(adc1_handle, LDR_CHANNEL, &config);
-
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    TickType_t lastWakeTime = xTaskGetTickCount();
+    const TickType_t frequency = pdMS_TO_TICKS(2000);
 
     while (1) {
         float temp = 0.0;
@@ -92,11 +76,29 @@ void app_main(void)
         int light = read_ldr_percentage();
 
         if (read_dht22(&temp, &hum) == ESP_OK) {
-            printf("Temperature: %.2f C | Humidity: %.2f %% | Light: %d %%\n", temp, hum, light);
+            printf("[SensorTask] Temp: %.2f C | Humidity: %.2f %% | Light: %d %%\n", temp, hum, light);
         } else {
-            printf("Light: %d %% (Waiting for DHT22...)\n", light);
+            printf("[SensorTask] Light: %d %% (Waiting for DHT22...)\n", light);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelayUntil(&lastWakeTime, frequency);
     }
+}
+
+void app_main(void)
+{
+    printf("Starting Multisensor System...\n");
+
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+        .unit_id = ADC_UNIT_1,
+    };
+    adc_oneshot_new_unit(&init_config1, &adc1_handle);
+
+    adc_oneshot_chan_cfg_t config = {
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+        .atten = ADC_ATTEN_DB_12,
+    };
+    adc_oneshot_config_channel(adc1_handle, LDR_CHANNEL, &config);
+
+    xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
 }
