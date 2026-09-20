@@ -7,15 +7,16 @@
     {
       "type": "wokwi-dht22",
       "id": "dht1",
-      "top": -120,
-      "left": 150,
+      "top": -140,
+      "left": 160,
       "attrs": {
         "temperature": "25.4",
         "humidity": "61.2"
       }
     },
-    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -120, "left": -120, "attrs": {} },
-    { "type": "board-ssd1306", "id": "oled1", "top": 140, "left": 150, "attrs": {} }
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -140, "left": -120, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 140, "left": 160, "attrs": {} },
+    { "type": "wokwi-ky-040", "id": "enc1", "top": 140, "left": -120, "attrs": {} }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
@@ -29,7 +30,12 @@
     [ "oled1:VCC", "esp:3V3", "red", [ "v0" ] ],
     [ "oled1:GND", "esp:GND.1", "black", [ "v0" ] ],
     [ "oled1:SDA", "esp:21", "yellow", [ "v0" ] ],
-    [ "oled1:SCL", "esp:22", "cyan", [ "v0" ] ]
+    [ "oled1:SCL", "esp:22", "cyan", [ "v0" ] ],
+    [ "enc1:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "enc1:GND", "esp:GND.2", "black", [ "v0" ] ],
+    [ "enc1:CLK", "esp:18", "orange", [ "v0" ] ],
+    [ "enc1:DT", "esp:19", "purple", [ "v0" ] ],
+    [ "enc1:SW", "esp:23", "gray", [ "v0" ] ]
   ],
   "dependencies": {}
 }
