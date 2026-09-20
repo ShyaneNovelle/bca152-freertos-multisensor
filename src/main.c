@@ -1,6 +1,8 @@
 ﻿#include <stdio.h>
+#include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_timer.h"
@@ -9,6 +11,14 @@
 #define DHT_PIN GPIO_NUM_15
 #define LDR_CHANNEL ADC_CHANNEL_6 
 
+typedef struct {
+    float temperature;
+    float humidity;
+    int lightLevel;
+    bool motionDetected;
+} SensorData;
+
+static QueueHandle_t sensorQueue = NULL;
 static adc_oneshot_unit_handle_t adc1_handle;
 
 static int wait_or_timeout(int us_timeout, int expected_level) {
@@ -59,8 +69,7 @@ static esp_err_t read_dht22(float *temperature, float *humidity) {
 static int read_ldr_percentage(void) {
     int raw = 0;
     if (adc_oneshot_read(adc1_handle, LDR_CHANNEL, &raw) == ESP_OK) {
-        int percentage = (raw * 100) / 4095;
-        return percentage;
+        return (raw * 100) / 4095;
     }
     return 0;
 }
@@ -71,23 +80,37 @@ void sensor_task(void *pvParameters)
     const TickType_t frequency = pdMS_TO_TICKS(2000);
 
     while (1) {
-        float temp = 0.0;
-        float hum = 0.0;
-        int light = read_ldr_percentage();
+        SensorData data = {0};
+        data.lightLevel = read_ldr_percentage();
+        data.motionDetected = false; 
 
-        if (read_dht22(&temp, &hum) == ESP_OK) {
-            printf("[SensorTask] Temp: %.2f C | Humidity: %.2f %% | Light: %d %%\n", temp, hum, light);
-        } else {
-            printf("[SensorTask] Light: %d %% (Waiting for DHT22...)\n", light);
+        if (read_dht22(&data.temperature, &data.humidity) == ESP_OK) {
+            if (xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100)) != pdPASS) {
+                printf("[SensorTask] Warning: Queue is full!\n");
+            }
         }
 
         vTaskDelayUntil(&lastWakeTime, frequency);
     }
 }
 
+void display_task(void *pvParameters)
+{
+    SensorData receivedData;
+
+    while (1) {
+        if (xQueueReceive(sensorQueue, &receivedData, portMAX_DELAY) == pdPASS) {
+            printf("[DisplayTask RX] Temp: %.2f C | Humidity: %.2f %% | Light: %d %%\n",
+                   receivedData.temperature,
+                   receivedData.humidity,
+                   receivedData.lightLevel);
+        }
+    }
+}
+
 void app_main(void)
 {
-    printf("Starting Multisensor System...\n");
+    printf("Initializing System with FreeRTOS Queue...\n");
 
     adc_oneshot_unit_init_cfg_t init_config1 = {
         .unit_id = ADC_UNIT_1,
@@ -100,5 +123,12 @@ void app_main(void)
     };
     adc_oneshot_config_channel(adc1_handle, LDR_CHANNEL, &config);
 
-    xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
+    sensorQueue = xQueueCreate(5, sizeof(SensorData));
+
+    if (sensorQueue != NULL) {
+        xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
+        xTaskCreate(display_task, "DisplayTask", 4096, NULL, 1, NULL);
+    } else {
+        printf("Error: Failed to create sensorQueue!\n");
+    }
 }
