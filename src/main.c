@@ -13,7 +13,6 @@
 #define DHT_PIN GPIO_NUM_15
 #define LDR_CHANNEL ADC_CHANNEL_6 
 
-// Rotary Encoder Pins
 #define ENCODER_CLK GPIO_NUM_18
 #define ENCODER_DT  GPIO_NUM_19
 #define ENCODER_SW  GPIO_NUM_23
@@ -22,6 +21,15 @@
 #define I2C_SDA_PIN GPIO_NUM_21
 #define I2C_SCL_PIN GPIO_NUM_22
 #define OLED_ADDR 0x3C
+
+typedef enum {
+    ALARM_NORMAL = 0,
+    ALARM_LOW_TEMPERATURE,
+    ALARM_HIGH_TEMPERATURE
+} AlarmState;
+
+#define TEMP_LOW_THRESHOLD   18.0f
+#define TEMP_HIGH_THRESHOLD  28.0f
 
 typedef enum {
     MODE_TEMPERATURE = 0,
@@ -36,6 +44,7 @@ typedef struct {
     float humidity;
     int lightLevel;
     bool motionDetected;
+    AlarmState alarm;
 } SensorData;
 
 static QueueHandle_t sensorQueue = NULL;
@@ -43,7 +52,15 @@ static QueueHandle_t modeQueue = NULL;
 static adc_oneshot_unit_handle_t adc1_handle;
 static i2c_master_dev_handle_t oled_dev_handle = NULL;
 
-// 5x7 Font Matrix para sa ASCII Characters
+AlarmState evaluateTemperature(float temperature) {
+    if (temperature < TEMP_LOW_THRESHOLD) {
+        return ALARM_LOW_TEMPERATURE;
+    } else if (temperature > TEMP_HIGH_THRESHOLD) {
+        return ALARM_HIGH_TEMPERATURE;
+    }
+    return ALARM_NORMAL;
+}
+
 static const uint8_t font5x7[][5] = {
     [' ' - 32] = {0x00, 0x00, 0x00, 0x00, 0x00},
     ['%' - 32] = {0x23, 0x13, 0x08, 0x64, 0x62},
@@ -75,6 +92,7 @@ static const uint8_t font5x7[][5] = {
     ['T' - 32] = {0x01, 0x01, 0x7F, 0x01, 0x01},
     ['U' - 32] = {0x3F, 0x40, 0x40, 0x40, 0x3F},
     ['V' - 32] = {0x1F, 0x20, 0x40, 0x20, 0x1F},
+    ['W' - 32] = {0x7F, 0x20, 0x18, 0x20, 0x7F},
     ['Y' - 32] = {0x07, 0x08, 0x70, 0x08, 0x07},
 };
 
@@ -102,13 +120,13 @@ static void oled_init(void) {
     };
     i2c_master_bus_add_device(bus_handle, &dev_cfg, &oled_dev_handle);
 
-    oled_send_cmd(0xAE); 
-    oled_send_cmd(0x20); oled_send_cmd(0x00); 
-    oled_send_cmd(0x40); 
-    oled_send_cmd(0xA1); 
-    oled_send_cmd(0xC8); 
-    oled_send_cmd(0x88); 
-    oled_send_cmd(0xAF); 
+    oled_send_cmd(0xAE);
+    oled_send_cmd(0x20); oled_send_cmd(0x00);
+    oled_send_cmd(0x40);
+    oled_send_cmd(0xA1);
+    oled_send_cmd(0xC8);
+    oled_send_cmd(0x88);
+    oled_send_cmd(0xAF);
 }
 
 static void oled_clear(void) {
@@ -205,6 +223,16 @@ void sensor_task(void *pvParameters) {
         data.motionDetected = false;
 
         if (read_dht22(&data.temperature, &data.humidity) == ESP_OK) {
+            // Section 30: Tawagon ang pure evaluation function
+            data.alarm = evaluateTemperature(data.temperature);
+
+            const char *alarm_text = "NORMAL";
+            if (data.alarm == ALARM_LOW_TEMPERATURE) alarm_text = "LOW TEMP";
+            else if (data.alarm == ALARM_HIGH_TEMPERATURE) alarm_text = "HIGH TEMP";
+
+            printf("[SensorTask] Temp: %.2f C (Alarm: %s) | Hum: %.2f %% | Light: %d %%\n",
+                   data.temperature, alarm_text, data.humidity, data.lightLevel);
+
             xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100));
         }
 
@@ -280,7 +308,8 @@ void display_task(void *pvParameters) {
         .temperature = 25.4,
         .humidity = 61.2,
         .lightLevel = 24,
-        .motionDetected = false
+        .motionDetected = false,
+        .alarm = ALARM_NORMAL
     };
     DisplayMode active_mode = MODE_TEMPERATURE;
 
@@ -311,7 +340,14 @@ void display_task(void *pvParameters) {
 }
 
 void app_main(void) {
-    printf("Starting Multisensor with Rotary Encoder...\n");
+    printf("Starting Multisensor with Testable Alarm Logic...\n");
+
+    printf("[Unit Test] evaluateTemperature(15.0) = %s\n",
+           evaluateTemperature(15.0) == ALARM_LOW_TEMPERATURE ? "PASS (LOW)" : "FAIL");
+    printf("[Unit Test] evaluateTemperature(25.4) = %s\n",
+           evaluateTemperature(25.4) == ALARM_NORMAL ? "PASS (NORMAL)" : "FAIL");
+    printf("[Unit Test] evaluateTemperature(32.0) = %s\n",
+           evaluateTemperature(32.0) == ALARM_HIGH_TEMPERATURE ? "PASS (HIGH)" : "FAIL");
 
     adc_oneshot_unit_init_cfg_t init_config1 = {.unit_id = ADC_UNIT_1};
     adc_oneshot_new_unit(&init_config1, &adc1_handle);
