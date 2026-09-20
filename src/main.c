@@ -82,11 +82,11 @@ void sensor_task(void *pvParameters)
     while (1) {
         SensorData data = {0};
         data.lightLevel = read_ldr_percentage();
-        data.motionDetected = false; 
+        data.motionDetected = false;
 
         if (read_dht22(&data.temperature, &data.humidity) == ESP_OK) {
             if (xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100)) != pdPASS) {
-                printf("[SensorTask] Warning: Queue is full!\n");
+                printf("[SensorTask] Queue full!\n");
             }
         }
 
@@ -94,13 +94,13 @@ void sensor_task(void *pvParameters)
     }
 }
 
-void display_task(void *pvParameters)
+void consumer_task(void *pvParameters)
 {
     SensorData receivedData;
 
     while (1) {
         if (xQueueReceive(sensorQueue, &receivedData, portMAX_DELAY) == pdPASS) {
-            printf("[DisplayTask RX] Temp: %.2f C | Humidity: %.2f %% | Light: %d %%\n",
+            printf("[Queue RX] Temp: %.2f C | Humidity: %.2f %% | Light: %d %%\n",
                    receivedData.temperature,
                    receivedData.humidity,
                    receivedData.lightLevel);
@@ -110,7 +110,7 @@ void display_task(void *pvParameters)
 
 void app_main(void)
 {
-    printf("Initializing System with FreeRTOS Queue...\n");
+    printf("Initializing FreeRTOS Queue Demo...\n");
 
     adc_oneshot_unit_init_cfg_t init_config1 = {
         .unit_id = ADC_UNIT_1,
@@ -127,8 +127,8 @@ void app_main(void)
 
     if (sensorQueue != NULL) {
         xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
-        xTaskCreate(display_task, "DisplayTask", 4096, NULL, 1, NULL);
+        xTaskCreate(consumer_task, "ConsumerTask", 4096, NULL, 1, NULL);
     } else {
-        printf("Error: Failed to create sensorQueue!\n");
+        printf("Failed to create sensorQueue!\n");
     }
 }
