@@ -17,7 +17,8 @@
     { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -150, "left": -120, "attrs": {} },
     { "type": "board-ssd1306", "id": "oled1", "top": 140, "left": 160, "attrs": {} },
     { "type": "wokwi-ky-040", "id": "enc1", "top": 140, "left": -120, "attrs": {} },
-    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": -150, "left": 20, "attrs": {} }
+    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": -150, "left": 20, "attrs": {} },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 0, "left": 160, "attrs": {} }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
@@ -39,7 +40,9 @@
     [ "enc1:SW", "esp:23", "gray", [ "v0" ] ],
     [ "pir1:VCC", "esp:3V3", "red", [ "v0" ] ],
     [ "pir1:GND", "esp:GND.1", "black", [ "v0" ] ],
-    [ "pir1:OUT", "esp:27", "violet", [ "v0" ] ]
+    [ "pir1:OUT", "esp:27", "violet", [ "v0" ] ],
+    [ "bz1:1", "esp:GND.2", "black", [ "v0" ] ],
+    [ "bz1:2", "esp:14", "red", [ "v0" ] ]
   ],
   "dependencies": {}
 }

@@ -4,16 +4,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_timer.h"
 #include "rom/ets_sys.h"
 
+// Hardware Pin Configuration
 #define DHT_PIN GPIO_NUM_15
 #define LDR_CHANNEL ADC_CHANNEL_6 
-#define PIR_PIN GPIO_NUM_27       
-
+#define PIR_PIN GPIO_NUM_27
+#define BUZZER_PIN GPIO_NUM_14
 
 #define ENCODER_CLK GPIO_NUM_18
 #define ENCODER_DT  GPIO_NUM_19
@@ -24,11 +26,14 @@
 #define I2C_SCL_PIN GPIO_NUM_22
 #define OLED_ADDR 0x3C
 
-typedef enum {
-    SYSTEM_ACTIVE = 0,
-    SYSTEM_INACTIVE
-} SystemState;
+// Section 35: Event Group Bit Definitions
+#define EVENT_ACTIVE (1 << 0) // BIT0
+#define EVENT_MOTION (1 << 1) // BIT1
+#define EVENT_ALARM  (1 << 2) // BIT2
 
+static EventGroupHandle_t systemEvents = NULL;
+
+// Alarm States & Thresholds
 typedef enum {
     ALARM_NORMAL = 0,
     ALARM_LOW_TEMPERATURE,
@@ -38,6 +43,7 @@ typedef enum {
 #define TEMP_LOW_THRESHOLD   18.0f
 #define TEMP_HIGH_THRESHOLD  28.0f
 
+// Display Modes
 typedef enum {
     MODE_TEMPERATURE = 0,
     MODE_HUMIDITY,
@@ -46,6 +52,7 @@ typedef enum {
     MODE_COUNT
 } DisplayMode;
 
+// Sensor Data Structure
 typedef struct {
     float temperature;
     float humidity;
@@ -56,10 +63,8 @@ typedef struct {
 
 static QueueHandle_t sensorQueue = NULL;
 static QueueHandle_t modeQueue = NULL;
-static QueueHandle_t stateQueue = NULL; 
 static adc_oneshot_unit_handle_t adc1_handle;
 static i2c_master_dev_handle_t oled_dev_handle = NULL;
-static volatile bool g_motion_status = false;
 
 // Pure Testable Function
 AlarmState evaluateTemperature(float temperature) {
@@ -71,6 +76,7 @@ AlarmState evaluateTemperature(float temperature) {
     return ALARM_NORMAL;
 }
 
+// 5x7 Font Table
 static const uint8_t font5x7[][5] = {
     [' ' - 32] = {0x00, 0x00, 0x00, 0x00, 0x00},
     ['%' - 32] = {0x23, 0x13, 0x08, 0x64, 0x62},
@@ -227,29 +233,23 @@ void motion_task(void *pvParameters) {
     gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIR_PIN, GPIO_PULLDOWN_ONLY);
 
-    SystemState current_state = SYSTEM_ACTIVE;
     int64_t last_motion_time = esp_timer_get_time();
-    const int64_t timeout_us = 15LL * 1000000LL; 
+    const int64_t timeout_us = 15LL * 1000000LL;
+
     while (1) {
         int motion = gpio_get_level(PIR_PIN);
-        g_motion_status = (motion == 1);
 
         if (motion == 1) {
             last_motion_time = esp_timer_get_time();
-            if (current_state == SYSTEM_INACTIVE) {
-                current_state = SYSTEM_ACTIVE;
-                printf("[MotionTask] Motion Detected! State -> ACTIVE\n");
-                xQueueOverwrite(stateQueue, &current_state);
-            }
+            xEventGroupSetBits(systemEvents, EVENT_MOTION | EVENT_ACTIVE);
         } else {
-            if (current_state == SYSTEM_ACTIVE && (esp_timer_get_time() - last_motion_time) > timeout_us) {
-                current_state = SYSTEM_INACTIVE;
-                printf("[MotionTask] Inactivity Timeout (15s)! State -> INACTIVE\n");
-                xQueueOverwrite(stateQueue, &current_state);
+            xEventGroupClearBits(systemEvents, EVENT_MOTION);
+            if ((esp_timer_get_time() - last_motion_time) > timeout_us) {
+                xEventGroupClearBits(systemEvents, EVENT_ACTIVE);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100)); 
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -260,14 +260,44 @@ void sensor_task(void *pvParameters) {
     while (1) {
         SensorData data = {0};
         data.lightLevel = read_ldr_percentage();
-        data.motionDetected = g_motion_status;
+        data.motionDetected = (xEventGroupGetBits(systemEvents) & EVENT_MOTION) != 0;
 
         if (read_dht22(&data.temperature, &data.humidity) == ESP_OK) {
             data.alarm = evaluateTemperature(data.temperature);
+
+            if (data.alarm != ALARM_NORMAL) {
+                xEventGroupSetBits(systemEvents, EVENT_ALARM);
+            } else {
+                xEventGroupClearBits(systemEvents, EVENT_ALARM);
+            }
+
             xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100));
         }
 
         vTaskDelayUntil(&lastWakeTime, frequency);
+    }
+}
+
+void alarm_task(void *pvParameters) {
+    gpio_set_direction(BUZZER_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(BUZZER_PIN, 0);
+
+    while (1) {
+        EventBits_t bits = xEventGroupWaitBits(
+            systemEvents,
+            EVENT_ACTIVE | EVENT_ALARM,
+            pdFALSE,
+            pdFALSE,
+            pdMS_TO_TICKS(100)
+        );
+
+        if ((bits & EVENT_ACTIVE) && (bits & EVENT_ALARM)) {
+            gpio_set_level(BUZZER_PIN, 1);
+        } else {
+            gpio_set_level(BUZZER_PIN, 0);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -286,16 +316,10 @@ void input_task(void *pvParameters) {
         if (current_clk != last_clk && current_clk == 0) {
             if (gpio_get_level(ENCODER_DT) != current_clk) {
                 current_mode = (current_mode + 1) % MODE_COUNT;
-                printf("[InputTask] Rotated CW -> Mode: %d\n", current_mode);
             } else {
-                if (current_mode == 0) {
-                    current_mode = MODE_COUNT - 1;
-                } else {
-                    current_mode--;
-                }
-                printf("[InputTask] Rotated CCW -> Mode: %d\n", current_mode);
+                if (current_mode == 0) current_mode = MODE_COUNT - 1;
+                else current_mode--;
             }
-
             xQueueOverwrite(modeQueue, &current_mode);
         }
 
@@ -335,31 +359,24 @@ static void render_screen(DisplayMode mode, const SensorData *data) {
 }
 
 void display_task(void *pvParameters) {
-    SensorData latest = {
-        .temperature = 25.4,
-        .humidity = 61.2,
-        .lightLevel = 24,
-        .motionDetected = false,
-        .alarm = ALARM_NORMAL
-    };
+    SensorData latest = { .temperature = 25.4, .humidity = 61.2, .lightLevel = 24 };
     DisplayMode active_mode = MODE_TEMPERATURE;
-    SystemState current_state = SYSTEM_ACTIVE;
+    bool was_active = true;
 
     oled_init();
     render_screen(active_mode, &latest);
 
     while (1) {
+        EventBits_t bits = xEventGroupGetBits(systemEvents);
+        bool is_active = (bits & EVENT_ACTIVE) != 0;
         bool need_refresh = false;
 
-        SystemState new_state;
-        if (xQueueReceive(stateQueue, &new_state, 0) == pdPASS) {
-            if (new_state != current_state) {
-                current_state = new_state;
-                if (current_state == SYSTEM_INACTIVE) {
-                    oled_clear(); 
-                } else {
-                    need_refresh = true; 
-                }
+        if (is_active != was_active) {
+            was_active = is_active;
+            if (!is_active) {
+                oled_clear();
+            } else {
+                need_refresh = true;
             }
         }
 
@@ -367,24 +384,24 @@ void display_task(void *pvParameters) {
         if (xQueueReceive(modeQueue, &new_mode, pdMS_TO_TICKS(50)) == pdPASS) {
             if (new_mode != active_mode) {
                 active_mode = new_mode;
-                if (current_state == SYSTEM_ACTIVE) need_refresh = true;
+                if (is_active) need_refresh = true;
             }
         }
 
         SensorData new_data;
         if (xQueueReceive(sensorQueue, &new_data, 0) == pdPASS) {
             latest = new_data;
-            if (current_state == SYSTEM_ACTIVE) need_refresh = true;
+            if (is_active) need_refresh = true;
         }
 
-        if (current_state == SYSTEM_ACTIVE && need_refresh) {
+        if (is_active && need_refresh) {
             render_screen(active_mode, &latest);
         }
     }
 }
 
 void app_main(void) {
-    printf("Starting System with Motion and State Machine...\n");
+    printf("Starting Multisensor with Event Group Signaling...\n");
 
     adc_oneshot_unit_init_cfg_t init_config1 = {.unit_id = ADC_UNIT_1};
     adc_oneshot_new_unit(&init_config1, &adc1_handle);
@@ -395,20 +412,21 @@ void app_main(void) {
     };
     adc_oneshot_config_channel(adc1_handle, LDR_CHANNEL, &config);
 
+    // Section 35: FreeRTOS Event Group Creation
+    systemEvents = xEventGroupCreate();
+    xEventGroupSetBits(systemEvents, EVENT_ACTIVE);
+
     sensorQueue = xQueueCreate(5, sizeof(SensorData));
     modeQueue = xQueueCreate(1, sizeof(DisplayMode));
-    stateQueue = xQueueCreate(1, sizeof(SystemState));
 
     DisplayMode initial_mode = MODE_TEMPERATURE;
-    SystemState initial_state = SYSTEM_ACTIVE;
     xQueueSend(modeQueue, &initial_mode, 0);
-    xQueueSend(stateQueue, &initial_state, 0);
 
-    if (sensorQueue != NULL && modeQueue != NULL && stateQueue != NULL) {
-        
-        xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
-        xTaskCreate(input_task, "InputTask", 2048, NULL, 3, NULL);
+    if (systemEvents != NULL && sensorQueue != NULL && modeQueue != NULL) {
+        xTaskCreate(alarm_task, "AlarmTask", 2048, NULL, 3, NULL);
         xTaskCreate(motion_task, "MotionTask", 2048, NULL, 3, NULL);
+        xTaskCreate(input_task, "InputTask", 2048, NULL, 3, NULL);
+        xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
         xTaskCreate(display_task, "DisplayTask", 4096, NULL, 1, NULL);
     }
 }
