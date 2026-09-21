@@ -13,7 +13,7 @@
 #include "rom/ets_sys.h"
 
 #define DHT_PIN GPIO_NUM_15
-#define LDR_CHANNEL ADC_CHANNEL_6 // GPIO 34
+#define LDR_CHANNEL ADC_CHANNEL_6 
 #define PIR_PIN GPIO_NUM_27
 #define BUZZER_PIN GPIO_NUM_14
 
@@ -26,9 +26,9 @@
 #define I2C_SCL_PIN GPIO_NUM_22
 #define OLED_ADDR 0x3C
 
-#define EVENT_ACTIVE (1 << 0) // BIT0
-#define EVENT_MOTION (1 << 1) // BIT1
-#define EVENT_ALARM  (1 << 2) // BIT2
+#define EVENT_ACTIVE (1 << 0) 
+#define EVENT_MOTION (1 << 1) 
+#define EVENT_ALARM  (1 << 2) 
 
 static EventGroupHandle_t systemEvents = NULL;
 
@@ -41,9 +41,8 @@ typedef enum {
 } AlarmState;
 
 #define TEMP_LOW_THRESHOLD   18.0f
-#define TEMP_HIGH_THRESHOLD  28.0f
+#define TEMP_HIGH_THRESHOLD  30.0f
 
-// Display Modes
 typedef enum {
     MODE_TEMPERATURE = 0,
     MODE_HUMIDITY,
@@ -65,7 +64,6 @@ static QueueHandle_t modeQueue = NULL;
 static adc_oneshot_unit_handle_t adc1_handle;
 static i2c_master_dev_handle_t oled_dev_handle = NULL;
 
-// Thread-safe wrapper para maiwasan ang interleaved serial output
 void safe_log(const char *msg) {
     if (serialMutex != NULL) {
         if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
@@ -75,7 +73,6 @@ void safe_log(const char *msg) {
     }
 }
 
-// Pure Testable Function
 AlarmState evaluateTemperature(float temperature) {
     if (temperature < TEMP_LOW_THRESHOLD) {
         return ALARM_LOW_TEMPERATURE;
@@ -85,10 +82,10 @@ AlarmState evaluateTemperature(float temperature) {
     return ALARM_NORMAL;
 }
 
-// 5x7 Font Table
 static const uint8_t font5x7[][5] = {
     [' ' - 32] = {0x00, 0x00, 0x00, 0x00, 0x00},
     ['%' - 32] = {0x23, 0x13, 0x08, 0x64, 0x62},
+    ['-' - 32] = {0x08, 0x08, 0x08, 0x08, 0x08},
     ['.' - 32] = {0x00, 0x60, 0x60, 0x00, 0x00},
     ['0' - 32] = {0x3E, 0x51, 0x49, 0x45, 0x3E},
     ['1' - 32] = {0x00, 0x42, 0x7F, 0x40, 0x00},
@@ -238,7 +235,6 @@ static int read_ldr_percentage(void) {
     return 0;
 }
 
-// MotionTask
 void motion_task(void *pvParameters) {
     gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIR_PIN, GPIO_PULLDOWN_ONLY);
@@ -272,7 +268,6 @@ void motion_task(void *pvParameters) {
     }
 }
 
-// SensorTask
 void sensor_task(void *pvParameters) {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(2000);
@@ -304,7 +299,6 @@ void sensor_task(void *pvParameters) {
     }
 }
 
-// AlarmTask
 void alarm_task(void *pvParameters) {
     gpio_set_direction(BUZZER_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(BUZZER_PIN, 0);
@@ -389,6 +383,7 @@ static void render_screen(DisplayMode mode, const SensorData *data) {
     }
 }
 
+// Section 26 & 27: DisplayTask (Priority 1)
 void display_task(void *pvParameters) {
     SensorData latest = { .temperature = 25.4, .humidity = 61.2, .lightLevel = 24 };
     DisplayMode active_mode = MODE_TEMPERATURE;
@@ -434,7 +429,7 @@ void display_task(void *pvParameters) {
 void app_main(void) {
     serialMutex = xSemaphoreCreateMutex();
 
-    safe_log("Starting Multisensor with Mutex Protected Serial...\n");
+    safe_log("Starting Multisensor Room Monitor...\n");
 
     adc_oneshot_unit_init_cfg_t init_config1 = {.unit_id = ADC_UNIT_1};
     adc_oneshot_new_unit(&init_config1, &adc1_handle);
@@ -455,10 +450,10 @@ void app_main(void) {
     xQueueSend(modeQueue, &initial_mode, 0);
 
     if (systemEvents != NULL && sensorQueue != NULL && modeQueue != NULL && serialMutex != NULL) {
-        xTaskCreate(alarm_task, "AlarmTask", 2048, NULL, 3, NULL);
-        xTaskCreate(motion_task, "MotionTask", 2048, NULL, 3, NULL);
-        xTaskCreate(input_task, "InputTask", 2048, NULL, 3, NULL);
-        xTaskCreate(sensor_task, "SensorTask", 4096, NULL, 2, NULL);
-        xTaskCreate(display_task, "DisplayTask", 4096, NULL, 1, NULL);
+        xTaskCreate(motion_task,  "MotionTask",  2048, NULL, 3, NULL); 
+        xTaskCreate(input_task,   "InputTask",   2048, NULL, 3, NULL); 
+        xTaskCreate(sensor_task,  "SensorTask",  4096, NULL, 2, NULL); 
+        xTaskCreate(alarm_task,   "AlarmTask",   2048, NULL, 2, NULL); 
+        xTaskCreate(display_task, "DisplayTask", 4096, NULL, 1, NULL); 
     }
 }
