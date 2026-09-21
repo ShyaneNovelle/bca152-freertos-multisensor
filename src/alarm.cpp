@@ -1,5 +1,8 @@
 #include "alarm.h"
+#include "sensors.h"
 #include "rtos_objects.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
 
 AlarmState evaluateTemperature(float temperature) {
@@ -12,24 +15,19 @@ AlarmState evaluateTemperature(float temperature) {
 }
 
 void alarm_task(void *pvParameters) {
+    gpio_reset_pin(BUZZER_PIN);
     gpio_set_direction(BUZZER_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(BUZZER_PIN, 0);
 
+    SensorData data;
     while (1) {
-        EventBits_t bits = xEventGroupWaitBits(
-            systemEvents,
-            EVENT_ACTIVE | EVENT_ALARM,
-            pdFALSE,
-            pdFALSE,
-            pdMS_TO_TICKS(100)
-        );
-
-        if ((bits & EVENT_ACTIVE) && (bits & EVENT_ALARM)) {
-            gpio_set_level(BUZZER_PIN, 1);
-        } else {
-            gpio_set_level(BUZZER_PIN, 0);
+        if (xQueueReceive(sensorQueue, &data, portMAX_DELAY) == pdTRUE) {
+            AlarmState state = evaluateTemperature(data.temperature);
+            if (state != ALARM_NORMAL) {
+                gpio_set_level(BUZZER_PIN, 1);
+            } else {
+                gpio_set_level(BUZZER_PIN, 0);
+            }
         }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }

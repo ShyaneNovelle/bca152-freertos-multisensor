@@ -1,10 +1,21 @@
-#pragma once
+#ifndef SYSTEM_STATE_H
+#define SYSTEM_STATE_H
 
 #include <stdbool.h>
 
 typedef enum {
-    SYSTEM_ACTIVE = 0,
-    SYSTEM_INACTIVE
+    STATE_INACTIVE = 0,
+    STATE_ACTIVE = 1
 } SystemState;
 
-SystemState evaluateSystemState(SystemState current, bool motion, bool timeout);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+SystemState evaluateSystemState(SystemState current, bool motionDetected, bool timeoutOccurred);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // SYSTEM_STATE_H

@@ -1,19 +1,30 @@
-#pragma once
+#ifndef INPUT_H
+#define INPUT_H
 
+#if __has_include("driver/gpio.h")
 #include "driver/gpio.h"
-
 #define ENCODER_CLK GPIO_NUM_18
 #define ENCODER_DT  GPIO_NUM_19
-#define ENCODER_SW  GPIO_NUM_23
+#endif
 
 typedef enum {
     MODE_TEMPERATURE = 0,
-    MODE_HUMIDITY,
-    MODE_LIGHT,
-    MODE_MOTION,
-    MODE_COUNT
+    MODE_HUMIDITY    = 1,
+    MODE_LIGHT       = 2,
+    MODE_MOTION      = 3,
+    MODE_COUNT       = 4
 } DisplayMode;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 DisplayMode nextDisplayMode(DisplayMode current);
 DisplayMode previousDisplayMode(DisplayMode current);
 void input_task(void *pvParameters);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif 
