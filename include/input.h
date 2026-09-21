@@ -3,8 +3,12 @@
 
 #if __has_include("driver/gpio.h")
 #include "driver/gpio.h"
+#ifndef ENCODER_CLK
 #define ENCODER_CLK GPIO_NUM_18
-#define ENCODER_DT  GPIO_NUM_19
+#endif
+#ifndef ENCODER_DT
+#define ENCODER_DT GPIO_NUM_19
+#endif
 #endif
 
 typedef enum {

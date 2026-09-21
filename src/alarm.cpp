@@ -1,9 +1,14 @@
 #include "alarm.h"
-#include "sensors.h"
 #include "rtos_objects.h"
+#include "sensors.h"
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+
+#ifndef BUZZER_PIN
+#define BUZZER_PIN GPIO_NUM_27
+#endif
 
 AlarmState evaluateTemperature(float temperature) {
     if (temperature < TEMP_LOW_THRESHOLD) {
@@ -20,14 +25,29 @@ void alarm_task(void *pvParameters) {
     gpio_set_level(BUZZER_PIN, 0);
 
     SensorData data;
-    while (1) {
-        if (xQueueReceive(sensorQueue, &data, portMAX_DELAY) == pdTRUE) {
-            AlarmState state = evaluateTemperature(data.temperature);
-            if (state != ALARM_NORMAL) {
-                gpio_set_level(BUZZER_PIN, 1);
-            } else {
-                gpio_set_level(BUZZER_PIN, 0);
-            }
+    memset(&data, 0, sizeof(SensorData));
+
+    for (;;) {
+        if (sensorQueue != NULL) {
+            xQueuePeek(sensorQueue, &data, portMAX_DELAY);
+        }
+
+        bool is_active = true;
+        if (systemEvents != NULL) {
+            EventBits_t bits = xEventGroupGetBits(systemEvents);
+            is_active = (bits & EVENT_ACTIVE) != 0;
+        }
+
+        AlarmState state = evaluateTemperature(data.temperature);
+
+        if (is_active && (state != ALARM_NORMAL)) {
+            gpio_set_level(BUZZER_PIN, 1);
+            vTaskDelay(pdMS_TO_TICKS(150));
+            gpio_set_level(BUZZER_PIN, 0);
+            vTaskDelay(pdMS_TO_TICKS(150));
+        } else {
+            gpio_set_level(BUZZER_PIN, 0);
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
     }
 }

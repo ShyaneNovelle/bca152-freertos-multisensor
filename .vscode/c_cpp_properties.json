@@ -8,6 +8,7 @@
         {
             "name": "PlatformIO",
             "includePath": [
+                "C:/Users/USER/Documents/bca152-freertos-multisensor/include",
                 "C:/Users/USER/Documents/bca152-freertos-multisensor/src",
                 "C:/Users/USER/.platformio/packages/framework-espidf/components/xtensa/esp32/include",
                 "C:/Users/USER/.platformio/packages/framework-espidf/components/xtensa/include",
@@ -229,12 +230,12 @@
                 "C:/Users/USER/.platformio/packages/framework-espidf/components/perfmon/include",
                 "C:/Users/USER/.platformio/packages/framework-espidf/components/rt/include",
                 "C:/Users/USER/.platformio/packages/framework-espidf/components/spiffs/include",
-                "C:/Users/USER/Documents/bca152-freertos-multisensor/include",
                 ""
             ],
             "browse": {
                 "limitSymbolsToIncludedHeaders": true,
                 "path": [
+                    "C:/Users/USER/Documents/bca152-freertos-multisensor/include",
                     "C:/Users/USER/Documents/bca152-freertos-multisensor/src",
                     "C:/Users/USER/.platformio/packages/framework-espidf/components/xtensa/esp32/include",
                     "C:/Users/USER/.platformio/packages/framework-espidf/components/xtensa/include",
@@ -456,7 +457,6 @@
                     "C:/Users/USER/.platformio/packages/framework-espidf/components/perfmon/include",
                     "C:/Users/USER/.platformio/packages/framework-espidf/components/rt/include",
                     "C:/Users/USER/.platformio/packages/framework-espidf/components/spiffs/include",
-                    "C:/Users/USER/Documents/bca152-freertos-multisensor/include",
                     ""
                 ]
             },

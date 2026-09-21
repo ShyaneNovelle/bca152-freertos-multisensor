@@ -5,7 +5,9 @@
 
 #if __has_include("driver/gpio.h")
 #include "driver/gpio.h"
-#define BUZZER_PIN GPIO_NUM_21
+#ifndef BUZZER_PIN
+#define BUZZER_PIN GPIO_NUM_27
+#endif
 #endif
 
 #define TEMP_LOW_THRESHOLD  18.0f

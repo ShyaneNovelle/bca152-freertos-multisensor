@@ -5,7 +5,7 @@
 
 typedef enum {
     STATE_INACTIVE = 0,
-    STATE_ACTIVE = 1
+    STATE_ACTIVE   = 1
 } SystemState;
 
 #ifdef __cplusplus
@@ -18,4 +18,4 @@ SystemState evaluateSystemState(SystemState current, bool motionDetected, bool t
 }
 #endif
 
-#endif // SYSTEM_STATE_H
+#endif 

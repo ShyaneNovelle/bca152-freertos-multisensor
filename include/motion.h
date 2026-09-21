@@ -1,7 +1,16 @@
-#pragma once
+#ifndef MOTION_H
+#define MOTION_H
 
-#include "driver/gpio.h"
+#include "sensors.h"
 
-#define PIR_PIN GPIO_NUM_27
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 void motion_task(void *pvParameters);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif 

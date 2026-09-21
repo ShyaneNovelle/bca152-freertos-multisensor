@@ -1,110 +1,141 @@
-#include <stdio.h>
-#include <string.h>
 #include "sensors.h"
 #include "rtos_objects.h"
-#include "alarm.h"
+#include <stdio.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
-#include "esp_timer.h"
 #include "rom/ets_sys.h"
 
-static adc_oneshot_unit_handle_t adc1_handle;
+static portMUX_TYPE dht_mux = portMUX_INITIALIZER_UNLOCKED;
+static adc_oneshot_unit_handle_t adc1_handle = NULL;
 
 void sensors_init(void) {
+    gpio_reset_pin(DHT_PIN);
+    gpio_set_direction(DHT_PIN, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_pull_mode(DHT_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_level(DHT_PIN, 1);
+
+    gpio_reset_pin(PIR_PIN);
+    gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
+
+    // Modernong ESP-IDF Oneshot ADC config nga fully zero-initialized
     adc_oneshot_unit_init_cfg_t init_config1;
     memset(&init_config1, 0, sizeof(init_config1));
     init_config1.unit_id = ADC_UNIT_1;
     init_config1.ulp_mode = ADC_ULP_MODE_DISABLE;
     adc_oneshot_new_unit(&init_config1, &adc1_handle);
 
-    adc_oneshot_chan_cfg_t config;
-    memset(&config, 0, sizeof(config));
-    config.atten = ADC_ATTEN_DB_12;
-    config.bitwidth = ADC_BITWIDTH_DEFAULT;
-    adc_oneshot_config_channel(adc1_handle, LDR_CHANNEL, &config);
+    adc_oneshot_chan_cfg_t chan_config;
+    memset(&chan_config, 0, sizeof(chan_config));
+    chan_config.atten = ADC_ATTEN_DB_12;
+    chan_config.bitwidth = ADC_BITWIDTH_12;
+    adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_6, &chan_config);
 }
 
-static int wait_or_timeout(int us_timeout, int expected_level) {
-    int elapsed = 0;
-    while (gpio_get_level(DHT_PIN) != expected_level) {
-        if (elapsed++ > us_timeout) return -1;
+static bool dht22_read(float *temp, float *hum) {
+    uint8_t data[5] = {0, 0, 0, 0, 0};
+
+    gpio_set_direction(DHT_PIN, GPIO_MODE_OUTPUT_OD);
+    gpio_set_level(DHT_PIN, 0);
+    ets_delay_us(1200);
+    gpio_set_level(DHT_PIN, 1);
+    ets_delay_us(30);
+    gpio_set_direction(DHT_PIN, GPIO_MODE_INPUT);
+
+    taskENTER_CRITICAL(&dht_mux);
+
+    int timeout = 100;
+    while (gpio_get_level(DHT_PIN) == 1) {
+        if (--timeout == 0) { taskEXIT_CRITICAL(&dht_mux); return false; }
         ets_delay_us(1);
     }
-    return elapsed;
-}
 
-static esp_err_t read_dht22(float *temperature, float *humidity) {
-    uint8_t data[5];
-    memset(data, 0, sizeof(data));
+    timeout = 100;
+    while (gpio_get_level(DHT_PIN) == 0) {
+        if (--timeout == 0) { taskEXIT_CRITICAL(&dht_mux); return false; }
+        ets_delay_us(1);
+    }
 
-    gpio_set_direction(DHT_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(DHT_PIN, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level(DHT_PIN, 1);
-    ets_delay_us(40);
-
-    gpio_set_direction(DHT_PIN, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(DHT_PIN, GPIO_PULLUP_ONLY);
-
-    if (wait_or_timeout(100, 0) < 0) return ESP_FAIL;
-    if (wait_or_timeout(100, 1) < 0) return ESP_FAIL;
-    if (wait_or_timeout(100, 0) < 0) return ESP_FAIL;
+    timeout = 100;
+    while (gpio_get_level(DHT_PIN) == 1) {
+        if (--timeout == 0) { taskEXIT_CRITICAL(&dht_mux); return false; }
+        ets_delay_us(1);
+    }
 
     for (int i = 0; i < 40; i++) {
-        if (wait_or_timeout(100, 1) < 0) return ESP_FAIL;
-        int64_t start = esp_timer_get_time();
-        if (wait_or_timeout(100, 0) < 0) return ESP_FAIL;
-        if ((esp_timer_get_time() - start) > 40) {
-            data[i / 8] |= (1 << (7 - (i % 8)));
+        timeout = 100;
+        while (gpio_get_level(DHT_PIN) == 0) {
+            if (--timeout == 0) { taskEXIT_CRITICAL(&dht_mux); return false; }
+            ets_delay_us(1);
+        }
+
+        int t = 0;
+        while (gpio_get_level(DHT_PIN) == 1) {
+            t++;
+            if (t > 150) break;
+            ets_delay_us(1);
+        }
+
+        data[i / 8] <<= 1;
+        if (t > 35) {
+            data[i / 8] |= 1;
         }
     }
 
-    if (data[4] != ((data[0] + data[1] + data[2] + data[3]) & 0xFF)) return ESP_FAIL;
+    taskEXIT_CRITICAL(&dht_mux);
 
-    int16_t raw_humidity = (data[0] << 8) | data[1];
-    int16_t raw_temperature = ((data[2] & 0x7F) << 8) | data[3];
-    if (data[2] & 0x80) raw_temperature = -raw_temperature;
+    if (data[4] == ((data[0] + data[1] + data[2] + data[3]) & 0xFF)) {
+        int raw_hum = (data[0] << 8) | data[1];
+        int raw_temp = ((data[2] & 0x7F) << 8) | data[3];
+        if (data[2] & 0x80) raw_temp = -raw_temp;
 
-    *humidity = raw_humidity / 10.0f;
-    *temperature = raw_temperature / 10.0f;
-    return ESP_OK;
-}
-
-static int read_ldr_percentage(void) {
-    int raw = 0;
-    if (adc_oneshot_read(adc1_handle, LDR_CHANNEL, &raw) == ESP_OK) {
-        return (raw * 100) / 4095;
+        *hum = raw_hum / 10.0f;
+        *temp = raw_temp / 10.0f;
+        return true;
     }
-    return 0;
+
+    return false;
 }
 
 void sensor_task(void *pvParameters) {
+    SensorData current_data;
+    memset(&current_data, 0, sizeof(SensorData));
+    current_data.temperature = 24.0f;
+    current_data.humidity = 55.0f;
+
     TickType_t lastWakeTime = xTaskGetTickCount();
-    const TickType_t frequency = pdMS_TO_TICKS(2000);
-    char log_buf[96];
+    const TickType_t period = pdMS_TO_TICKS(2000);
 
-    while (1) {
-        SensorData data;
-        memset(&data, 0, sizeof(data));
-        data.lightLevel = read_ldr_percentage();
-        data.motionDetected = (xEventGroupGetBits(systemEvents) & EVENT_MOTION) != 0;
-
-        if (read_dht22(&data.temperature, &data.humidity) == ESP_OK) {
-            data.alarm = evaluateTemperature(data.temperature);
-
-            if (data.alarm != ALARM_NORMAL) {
-                xEventGroupSetBits(systemEvents, EVENT_ALARM);
-            } else {
-                xEventGroupClearBits(systemEvents, EVENT_ALARM);
-            }
-
-            snprintf(log_buf, sizeof(log_buf),
-                     "[SensorTask] Temp: %.2f C | Hum: %.2f %% | Light: %d %%\n",
-                     data.temperature, data.humidity, data.lightLevel);
-            safe_log(log_buf);
-
-            xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100));
+    for (;;) {
+        float t = 0.0f, h = 0.0f;
+        if (dht22_read(&t, &h)) {
+            current_data.temperature = t;
+            current_data.humidity = h;
         }
 
-        vTaskDelayUntil(&lastWakeTime, frequency);
+        int raw_adc = 0;
+        if (adc1_handle != NULL) {
+            adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw_adc);
+        }
+        current_data.lightLevel = (raw_adc * 100) / 4095;
+
+        current_data.motionDetected = (gpio_get_level(PIR_PIN) == 1);
+
+        if (sensorQueue != NULL) {
+            xQueueOverwrite(sensorQueue, &current_data);
+        }
+
+        char log_buf[128];
+        snprintf(log_buf, sizeof(log_buf),
+                 "[SensorTask] Temp: %.1f C | Hum: %.1f %% | Light: %d %% | Motion: %s",
+                 current_data.temperature,
+                 current_data.humidity,
+                 current_data.lightLevel,
+                 current_data.motionDetected ? "YES" : "NO");
+        safe_log(log_buf);
+
+        vTaskDelayUntil(&lastWakeTime, period);
     }
 }

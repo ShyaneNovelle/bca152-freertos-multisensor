@@ -1,30 +1,39 @@
-#include <stdio.h>
 #include "rtos_objects.h"
-#include "input.h"
-#include "sensors.h"
+#include <stdio.h>
 
-EventGroupHandle_t systemEvents = NULL;
-SemaphoreHandle_t serialMutex = NULL;
 QueueHandle_t sensorQueue = NULL;
 QueueHandle_t modeQueue = NULL;
-
-void rtos_objects_init(void) {
-    serialMutex = xSemaphoreCreateMutex();
-    systemEvents = xEventGroupCreate();
-    xEventGroupSetBits(systemEvents, EVENT_ACTIVE);
-
-    sensorQueue = xQueueCreate(5, sizeof(SensorData));
-    modeQueue = xQueueCreate(1, sizeof(DisplayMode));
-
-    DisplayMode initial_mode = MODE_TEMPERATURE;
-    xQueueSend(modeQueue, &initial_mode, 0);
-}
+SemaphoreHandle_t serialMutex = NULL;
+EventGroupHandle_t systemEvents = NULL;
+EventGroupHandle_t systemStateEventGroup = NULL;
 
 void safe_log(const char *msg) {
+    if (msg == NULL) return;
     if (serialMutex != NULL) {
-        if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-            printf("%s", msg);
+        if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            printf("%s\n", msg);
             xSemaphoreGive(serialMutex);
         }
+    } else {
+        printf("%s\n", msg);
     }
+}
+
+void rtos_objects_init(void) {
+    if (sensorQueue == NULL) {
+        sensorQueue = xQueueCreate(1, sizeof(SensorData));
+    }
+    if (modeQueue == NULL) {
+        modeQueue = xQueueCreate(5, sizeof(int));
+    }
+    if (serialMutex == NULL) {
+        serialMutex = xSemaphoreCreateMutex();
+    }
+    if (systemEvents == NULL) {
+        systemEvents = xEventGroupCreate();
+        if (systemEvents != NULL) {
+            xEventGroupSetBits(systemEvents, EVENT_ACTIVE);
+        }
+    }
+    systemStateEventGroup = systemEvents;
 }
