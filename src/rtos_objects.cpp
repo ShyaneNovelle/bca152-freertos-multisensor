@@ -1,4 +1,5 @@
 #include "rtos_objects.h"
+#include "input.h"
 #include <stdio.h>
 
 QueueHandle_t sensorQueue = NULL;
@@ -24,7 +25,7 @@ void rtos_objects_init(void) {
         sensorQueue = xQueueCreate(1, sizeof(SensorData));
     }
     if (modeQueue == NULL) {
-        modeQueue = xQueueCreate(5, sizeof(int));
+        modeQueue = xQueueCreate(1, sizeof(DisplayMode));
     }
     if (serialMutex == NULL) {
         serialMutex = xSemaphoreCreateMutex();
