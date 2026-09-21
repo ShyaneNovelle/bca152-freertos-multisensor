@@ -2,7 +2,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
-
 #include "input.h"
 #include "rtos_objects.h"
 
@@ -49,6 +48,6 @@ void input_task(void *pvParameters) {
         }
 
         last_clk = current_clk;
-        vTaskDelay(pdMS_TO_TICKS(10)); 
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
