@@ -35,10 +35,11 @@ void input_task(void *pvParameters) {
     for (;;) {
         int current_clk = gpio_get_level((gpio_num_t)ENCODER_CLK);
 
+        // Sinusuri ang falling edge ng CLK (mula 1 papuntang 0)
         if (last_clk == 1 && current_clk == 0) {
             int dt_val = gpio_get_level((gpio_num_t)ENCODER_DT);
 
-            if (dt_val != 0) {
+            if (dt_val == 0) {
                 current_mode = nextDisplayMode(current_mode);
                 snprintf(log_buf, sizeof(log_buf), "[InputTask] CW -> Mode: %d", (int)current_mode);
             } else {
@@ -52,7 +53,12 @@ void input_task(void *pvParameters) {
                 xQueueOverwrite(modeQueue, &current_mode);
             }
 
-            vTaskDelay(pdMS_TO_TICKS(60));
+            int timeout = 0;
+            while (gpio_get_level((gpio_num_t)ENCODER_CLK) == 0 && timeout < 20) {
+                vTaskDelay(pdMS_TO_TICKS(5));
+                timeout++;
+            }
+
             last_clk = gpio_get_level((gpio_num_t)ENCODER_CLK);
             continue;
         }
