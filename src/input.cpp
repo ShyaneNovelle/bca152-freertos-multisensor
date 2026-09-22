@@ -53,12 +53,10 @@ void input_task(void *pvParameters) {
             }
 
             vTaskDelay(pdMS_TO_TICKS(150));
-
             last_clk = gpio_get_level((gpio_num_t)ENCODER_CLK);
-            continue;
+        } else {
+            last_clk = current_clk;
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
-
-        last_clk = current_clk;
-        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
