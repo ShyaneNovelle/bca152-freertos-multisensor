@@ -9,7 +9,7 @@
     { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": -120, "left": 0, "attrs": {} },
     { "type": "wokwi-ky-040", "id": "encoder", "top": 280, "left": -180, "attrs": {} },
     { "type": "board-ssd1306", "id": "oled", "top": 280, "left": 180, "attrs": {} },
-    { "type": "wokwi-buzzer", "id": "bz1", "top": 40, "left": 200, "attrs": { "hasVolume": "1" } }
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 40, "left": 200, "attrs": { "volume": "0.5", "hasAudio": "1" } }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
