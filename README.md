@@ -1,35 +1,35 @@
 # Real-Time Multisensor Room Monitoring System
 
 ## Project Overview
-This project implements a concurrent, real-time room environmental monitoring system using an ESP32 microcontroller running FreeRTOS and native ESP-IDF APIs. Designed and verified within the Wokwi simulation platform via PlatformIO, the system acquires real-time environmental telemetry (temperature, humidity, and ambient light), evaluates room occupancy through passive infrared (PIR) sensing, visualizes diagnostics across dynamic pages on an SSD1306 OLED display, and sounds an acoustic alarm when room temperatures violate configured safety boundaries.
+The project makes use of an ESP32 microcontroller together with FreeRTOS and the native ESP-IDF APIs to implement a concurrent, real-time system for monitoring the conditions in a room. It has been designed and verified using the Wokwi simulation platform with PlatformIO; the system collects real-time environmental data comprising temperature, humidity, and ambient light, determines whether or not the room is occupied by means of passive infrared (PIR) sensing, displays diagnostic information on dynamic pages via an SSD1306 OLED display, and triggers an acoustic alarm whenever the room temperature goes outside the safely defined limits.
 
 ![Finished System](docs/images/finished-system.png)
 
 *Figure 0: Completed multisensor monitoring system running in the Wokwi simulation environment.*
 
 ## Features
-- **Deterministic Periodic Telemetry**: Dual-core scheduled environmental sensing via DHT22 and LDR photoresistor using drift-free timing.
-- **Preemptive Multitasking Concurrency**: Modular FreeRTOS architecture utilizing 5 independent tasks with distinct priorities.
-- **Thread-Safe IPC**: Data transfer via FreeRTOS queues, binary event signaling via FreeRTOS event groups, and mutual exclusion for serial telemetry.
-- **Interactive UI Navigation**: Quadrature rotary encoder driver enabling cyclic page-flipping on a 128x64 I2C OLED display.
-- **Dynamic State Machine**: Automated power-saving states toggling between `ACTIVE` and `INACTIVE` based on motion timeouts.
-- **Automated Verification**: Integrated Unity unit testing framework and zero-defect static code analysis via cppcheck.
+- **Deterministic Periodic Telemetry**:Environmental sensing using a DHT22 and an LDR photoresistor on a dual-core system in a deterministic periodic manner with drift-free timing.
+- **Preemptive Multitasking Concurrency**: The use of a modular FreeRTOS architecture involving five separate tasks, each with its own priority, is known as preemptive multitasking concurrency.
+- **Thread-Safe IPC**: For threaded environments, data transfer is achieved using FreeRTOS queues, binary events are signalled using FreeRTOS event groups, and mutual exclusion is provided for serial telemetry.
+- **Interactive UI Navigation**:A driver for a quadrature rotary encoder that allows for cyclic page flipping on a 128x64 I2C OLED display. 
+- **Dynamic State Machine**: A dynamic state machine that automatically switches between ACTIVE and INACTIVE power-saving states according to motion timeouts.
+- **Automated Verification**: Automated verification is achieved by incorporating the Unity unit testing framework and using cppcheck for zero-defect static code analysis.
 
 ## Learning Objectives
-- Architect concurrent embedded firmware strictly under the Espressif IoT Development Framework (ESP-IDF) and FreeRTOS without Arduino wrappers.
-- Prevent race conditions, task starvation, and timing drift using queues, mutexes, event flags, and `vTaskDelayUntil()`.
-- Implement modular software architecture cleanly separating hardware-independent decision logic from peripheral abstraction drivers.
-- Exercise comprehensive software engineering practices including automated unit testing, static analysis, structured documentation, and Git version control.
+- Develop concurrent embedded firmware strictly under Espressif IoT Development Framework (ESP-IDF) and FreeRTOS without Arduino wrappers.
+- Avoid race conditions, task starvation and timing drift with queues, mutexes, event flags and vTaskDelayUntil().
+- Adopt a modular software architecture that cleanly separates hardware-independent decision logic from peripheral abstraction drivers.
+- Apply complete software engineering practices, such as automated unit tests, static analysis, structured documentation and Git version control.
 
 ## System Architecture
-The application adheres to a four-tier embedded software architecture separating application threads from physical silicon:
+The system is organized into four layers, keeping the application logic separate from the underlying hardware:
 
 ![System Architecture](docs/images/system-architecture.png)
 
-*Figure 1: Four-layer system architecture showing hardware decoupling, driver HAL, FreeRTOS kernel services, and concurrent application threads.*
+*Figure 1: System architecture, showing how hardware access, drivers, FreeRTOS, and application tasks are separated into layers.*
 
 ## FreeRTOS Architecture
-The system schedules five concurrent application tasks governed strictly by scheduling urgency and latency tolerance:
+Five tasks run concurrently on the system, with priorities assigned based on urgency and acceptable delay.
 
 ![FreeRTOS Architecture](docs/images/freertos-architecture.png)
 
@@ -68,9 +68,9 @@ The system schedules five concurrent application tasks governed strictly by sche
 | `DisplayTask` | Own and manage OLED rendering | On mode update / telemetry | 1 | Core 1 | `xQueueReceive` (Block) |
 
 ### Priority Justification
-- **Priority 3 (`InputTask`, `MotionTask`)**: Real-time user input and human occupancy pulses are ephemeral. Dropping an encoder click leads to poor responsiveness, necessitating top scheduling priority.
-- **Priority 2 (`SensorTask`, `AlarmTask`)**: Sensor acquisition takes tens of milliseconds. Processing alarms based on fresh telemetry is vital for safety, running immediately once raw data is packaged.
-- **Priority 1 (`DisplayTask`)**: I2C bus rendering involves transmitting 1024 bytes to the SSD1306 RAM, which is computationally sluggish. Running at lowest priority prevents UI flushes from delaying critical telemetry or user inputs.
+- **Priority 3 (`InputTask`, `MotionTask`)**: Encoder input and motion pulses are brief signals that can easily be missed. If a task isn't scheduled promptly, an encoder click or motion event could be lost, so these tasks are given the highest priority to stay responsive.
+- **Priority 2 (`SensorTask`, `AlarmTask`)**: Reading sensor data takes only a few tens of milliseconds. Since alarm decisions depend on having up-to-date readings, this task runs right after new data is ready to keep the alarm response timely.
+- **Priority 1 (`DisplayTask`)**: Updating the OLED means sending 1024 bytes over I2C, which takes noticeably longer than other tasks. Giving it the lowest priority keeps screen updates from delaying more time-sensitive work like sensor readings or user input.
 
 ## Inter-Task Communication
 Thread synchronization avoids race conditions and data corruption across dual-core operations:
@@ -80,7 +80,7 @@ Thread synchronization avoids race conditions and data corruption across dual-co
 - **`serialMutex`**: Guarded using `xSemaphoreTake(serialMutex, portMAX_DELAY)` within `safe_log()` to prevent interleaved writes during UART diagnostic reporting.
 
 ## State Machine
-The core runtime dynamically manages display wake cycles via a deterministic two-state finite state machine:
+The system controls when the display wakes and sleeps using a simple two-state state machine.
 
 ![State Machine](docs/images/state-machine.png)
 
@@ -219,18 +219,26 @@ pio check
 | FT-10 | Trigger PIR motion stimulus while system is in INACTIVE state | System awakens and immediately returns to ACTIVE state | Motion interrupt/polling resumed active state; EVENT_ACTIVE bit was set, restored display updates, and logged telemetry stream | PASS |
 
 ## Engineering Decisions
-- **Native ESP-IDF Framework Selection**: Prohibited Arduino core wrappers in favor of direct ESP-IDF APIs to expose native FreeRTOS features and achieve deterministic microsecond-level timing control.
+- **Native ESP-IDF Framework Selection**: Chose direct ESP-IDF APIs over Arduino wrappers to get full access to native FreeRTOS features and more precise, microsecond-level timing control.
 - **Drift-Free Scheduling via `vTaskDelayUntil()`**: Standard `vTaskDelay()` produces cumulative timing drift because execution durations vary before delay calls. `vTaskDelayUntil()` calculates absolute tick offsets, ensuring strict 2000 ms cadence for DHT22 readings.
-- **Display Ownership Pattern**: Restricted all physical I2C OLED memory writes exclusively to `DisplayTask`. Decoupling rendering from measurement threads eliminates bus contention and eliminates display flickering.
+- **Display Ownership Pattern**: Only DisplayTask is allowed to write to the OLED over I2C. Keeping rendering separate from the sensor-reading tasks avoids bus conflicts and stops the display from flickering.
 
 ## Limitations
-- **Wokwi ADC Idealization**: The Wokwi simulation models ADC transfer functions linearly, whereas physical ESP32 ADC1 channels exhibit non-linearity near 0.1V and 3.2V requiring polynomial curve calibration.
-- **PIR Sensor Settling Time**: Physical HC-SR501 PIR modules require a 30–60 second warm-up stabilization window after cold boot, which is omitted within the simulation sandbox.
+- Wokwi treats the ADC as perfectly linear, but real ESP32 ADC1 channels aren't. They get less accurate near 0.1V and 3.2V, which would need polynomial calibration to correct on actual hardware.
+- Real HC-SR501 PIR sensors need 30–60 seconds to stabilize after power-on, but the simulation skips this warm-up period entirely.
+- The 15-second inactivity timeout was suitable for rapid testing during laboratory trials (FT-09). In practical use, however, this duration is too short, since a person remaining still in the room would cause the display to repeatedly turn off and back on. 
+- The DHT22 and LDR sensors respond cleanly in Wokwi without any electronic noise. On actual hardware, breadboard wires and power fluctuations cause small signal delays and false checksum errors during DHT22 readouts.
+- The temperature thresholds and inactivity timeout are saved in RAM. If the board loses power or resets, all values return to the default code settings because flash memory (NVS) is not used.
+- When the system switches to the INACTIVE state, only the OLED screen turns off. The ESP32 CPU and sensors stay fully powered on, so the board still drains battery power at nearly the same rate.
+- Because DisplayTask handles all screen drawing on Core 1 to prevent bus conflicts, any delay in sensor processing on that core slows down the screen updates.
+- Using a queue depth of 1 always replaces the previous reading with the newest one. This keeps current data fresh, but sudden brief temperature spikes are lost if the display task is busy drawing a frame.
 
 ## Future Improvements
-- Implement persistent NVS (Non-Volatile Storage) memory routines to preserve alarm setpoints across power resets.
+- Replace manual software delays with the ESP32 RMT (Remote Control) peripheral to read the sensor signal accurately and avoid checksum errors on real hardware.
 - Integrate ESP32 Wi-Fi / MQTT networking tasks to publish room metrics to a remote IoT dashboard or cloud broker.
 - Introduce Light Sleep / Deep Sleep power modes triggered during `INACTIVE` cycles to reduce battery consumption.
+- Store user-adjusted temperature limits and screen timeout intervals in the ESP32 Non-Volatile Storage (NVS) so preferences are not wiped during a power loss or reboot.
+- Add a low-priority networking task to publish sensor readings to a local Home Assistant server or an MQTT dashboard for remote monitoring over the web.
 
 ## References and Acknowledgments
 - Espressif Systems. *ESP-IDF Programming Guide: FreeRTOS Architecture & APIs*.
